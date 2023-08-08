@@ -1,0 +1,368 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Infraestructura con Bastion Host utilizando AWS CloudFormation
+
+Mappings: 
+  RegionMap: 
+    us-east-1: 
+      "HVM64": "ami-0f9ce67dcf718d332"
+    us-east-2: 
+      "HVM64": "ami-0efbb9b523fbc6c53"
+    us-west-1: 
+      "HVM64": "ami-00f785ec8fc4f38fb"
+    us-west-2: 
+      "HVM64": "ami-0ea832bf7873542df"
+  AvailabilityZones: 
+    AZ: 
+      "ZonaA": 0
+      "ZonaB": 1
+      "ZonaC": 2
+
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Zonas y rango de direcciones IP"
+        Parameters:
+          - VpcCIDRBlock
+          - PublicCIDRBlock
+          - PrivateCIDRBlock
+          - AZoneSelected
+      - Label:
+          default: "Parametros EC2 Instances"
+        Parameters:
+          - InstanceType
+          - KeyPairBastion
+          - KeyPairPrivateEC2
+          - ShouldEnableHTTPSPort
+    ParameterLabels:
+      VpcCIDRBlock:
+        default: "Ingrese la CIDR que usara nuestra VPC?"
+      PublicCIDRBlock:
+        default: "Ingrese el Rango CIDR para el Subnet Publica"
+      PrivateCIDRBlock:
+        default: "Ingrese el Rango CIDR para el Subnet Privada"
+      AZoneSelected:
+        default: "Eliga la AZ donde estaran las subredes"
+      InstanceType:
+        default: "Ingreso el tipo de instancia para los hosts"
+      KeyPairBastion:
+        default: "Nombre de la Key Pair, que se usara para conectarse al bastion"
+      KeyPairPrivateEC2:
+        default: "Nombre de la Key Pair, que se usara para conectarse a la instancia privada"
+      ShouldEnableHTTPSPort:
+        default: "Quiere habilitar el puerto HTTPS en el Bastion Host?"
+
+Parameters:
+  VpcCIDRBlock:
+    Type: String
+    Default: "10.10.0.0/16"
+    Description: Rango de red para la VPC (CIDR block)
+    AllowedPattern: "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})"
+    ConstraintDescription: Debe ser un bloque CIDR valido (por ejemplo, 10.0.0.0/16)
+  PublicCIDRBlock:
+    Type: String
+    Default: "10.10.200.0/24"
+    Description: Rango de red para la Subnet Publica (CIDR block)
+    AllowedPattern: "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})"
+    ConstraintDescription: Debe ser un bloque CIDR valido (por ejemplo, 10.1.0.0/16)
+  PrivateCIDRBlock:
+    Type: String
+    Default: "10.10.100.0/24"
+    Description: Rango de red para la Subnet Privada (CIDR block)
+    AllowedPattern: "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})"
+    ConstraintDescription: Debe ser un bloque CIDR valido (por ejemplo, 10.0.3.0/24)
+  AZoneSelected:
+    Type: String
+    Default: "ZonaA"
+    Description: Availability Zones de la region
+    AllowedValues:
+      - "ZonaA"
+      - "ZonaB"
+      - "ZonaC"
+  InstanceType:
+    Description: Tipo de instancia EC2
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - m5.large
+      - m5.xlarge
+      - m5.2xlarge
+    ConstraintDescription: Debe ser un tipo de instancia EC2 valido.
+  KeyPairBastion:
+    Description: Nombre de la clave (KeyPair) existente para acceder al bastion
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: Debe ser el nombre de una clave (KeyPair) válida existente en tu cuenta de AWS.
+  KeyPairPrivateEC2:
+    Description: Nombre de la clave (KeyPair) existente para acceder a la instancia privada
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: Debe ser el nombre de una clave (KeyPair) válida existente en tu cuenta de AWS.
+  ShouldEnableHTTPSPort:
+    Type: String
+    Default: 'Si'
+    AllowedValues:
+      - 'Si'
+      - 'No'
+    Description: "Debo habilitar el puerto HTTPS?"
+
+Conditions:
+  EnableHTTPS:
+    Fn::Equals:
+      - !Ref ShouldEnableHTTPSPort
+      - 'Si'
+
+Resources:
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDRBlock 
+  MyPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: !Ref PublicCIDRBlock
+      # Seleccionamos el primer Availibility Zone de la region
+      AvailabilityZone: !Select
+        - !FindInMap [AvailabilityZones, AZ, !Ref AZoneSelected]
+        - !GetAZs 
+          Ref: 'AWS::Region'
+      Tags:
+        - Key: Tipo
+          Value: Publica
+  MyPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: !Ref PrivateCIDRBlock
+      # Seleccionamos el primer Availibility Zone de la region
+      AvailabilityZone: !Select
+        - !FindInMap [AvailabilityZones, AZ, !Ref AZoneSelected]
+        - !GetAZs 
+          Ref: 'AWS::Region'
+      Tags:
+        - Key: Tipo
+          Value: Privada
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref InternetGateway
+  EIPAllocation:
+    Type: AWS::EC2::EIP
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt EIPAllocation.AllocationId
+      SubnetId: !Ref MyPublicSubnet
+  
+  # Creamos tablas y rutas para permitir la comunicacion entre subredes, y la subred publica e internet
+  PublicSubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-public'
+  PublicSubnetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicSubnetRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref InternetGateway
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicSubnetRouteTable
+      SubnetId: !Ref MyPublicSubnet
+
+  PrivateSubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-private'
+  PrivateSubnetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateSubnetRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref NatGateway
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateSubnetRouteTable
+      SubnetId: !Ref MyPrivateSubnet
+  
+  # Grupo de seguridad del Bastion para permitir protocolo SSH
+  SSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group para SSH
+      VpcId: !Ref MyVPC
+  InboundSSHRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: SSHSecurityGroup
+    Properties:
+      GroupId: !Ref SSHSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: 0.0.0.0/0
+  
+  # Grupo de seguridad SSH para las instancias privadas, permitira el trafico solo desde la red publica
+  SSHPrivateSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group para SSH
+      VpcId: !Ref MyVPC
+  InboundSSHPrivateRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: SSHPrivateSecurityGroup
+    Properties:
+      GroupId: !Ref SSHPrivateSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: !Ref PublicCIDRBlock
+
+  # Dependiendo de valor dado, a este grupo de seguridad se le habilitara tambien el puerto HTTPS
+  InternetSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Security Group para Internet
+      GroupName: User12 Web security
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - !If
+          - EnableHTTPS
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            CidrIp: 0.0.0.0/0
+          - !Ref AWS::NoValue
+
+  BastionInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: SSHSecurityGroup
+    Properties:
+      InstanceType: !Ref InstanceType
+      # Utilizamos la imagen de Amazon Linux 2 Kernel para nuestra instancia, obteniendo el valor de un mapping
+      # Solo disponible si estamos en las regiones us-east-1, us-east-2, us-west-1 o us-west-2
+      ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", HVM64]
+      KeyName: !Ref KeyPairBastion
+      NetworkInterfaces: 
+      - AssociatePublicIpAddress: true
+        DeviceIndex: "0"
+        GroupSet: 
+          - !Ref SSHSecurityGroup
+          - !Ref InternetSecurityGroup
+        SubnetId: !Ref MyPublicSubnet
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd
+          systemctl start httpd
+          systemctl enable httpd
+          echo "<h1>Hello World from $(hostname -f)</h1>" > /var/www/html/index.html
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: SSHSecurityGroup
+    Properties:
+      InstanceType: !Ref InstanceType
+      # Utilizamos la imagen de Amazon Linux 2 Kernel para nuestra instancia, obteniendo el valor de un mapping
+      # Solo disponible si estamos en las regiones us-east-1, us-east-2, us-west-1 o us-west-2
+      ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", HVM64]
+      KeyName: !Ref KeyPairPrivateEC2
+      SubnetId: !Ref MyPrivateSubnet
+      SecurityGroupIds:
+        - !Ref SSHPrivateSecurityGroup
+
+Outputs:
+  PublicSubnetId:
+    Value: !Ref MyPublicSubnet
+    Description: ID de la subred pública creada
+    Export:
+      Name: PublicSubnetIdUser12
+  # Rangos Subnet Publica
+  PublicCIDRSubnetId:
+    Value: !GetAtt MyPublicSubnet.CidrBlock
+    Description: Rangos IP Subnet publica
+    Export:
+      Name: PublicCIDRSubnetIdUser12
+  # Rangos Subnet Publica
+  PrivateSubnetId:
+    Value: !Ref MyPrivateSubnet
+    Description: ID de la subred privada creada
+    Export:
+      Name: PrivateSubnetIdUser12
+  # Rangos Subnet Privada
+  PrivateCIDRSubnetId:
+    Value: !GetAtt MyPrivateSubnet.CidrBlock
+    Description: Rangos IP Subnet privada
+    Export:
+      Name: PrivateCIDRSubnetIdUser12
+  SSHSecurityGroupId:
+    Value: !Ref SSHSecurityGroup
+    Description: ID del Security Group para SSG
+    Export:
+      Name: SSHSecurityGroupIdUser12
+  SSHPrivateSecurityGroupId:
+    Value: !Ref SSHPrivateSecurityGroup
+    Description: ID del Security Group para SSG
+    Export:
+      Name: SSHPrivateSecurityGroupIdUser12
+  InternetSecurityGroupId:
+    Value: !Ref InternetSecurityGroup
+    Description: ID del Security Group para Internet
+    Export:
+      Name: InternetSecurityGroupIdUser12
+  InternetGatewayId:
+    Value: !Ref InternetGateway
+    Description: ID del Internet Gateway
+    Export:
+      Name: InternetGatewayIdUser12
+  NatGatewayId:
+    Value: !Ref NatGateway
+    Description: ID del Nat Gateway
+    Export:
+      Name: NatGatewayIdUser12
+  NatGatewayEIP:
+    Value: !Ref EIPAllocation
+    Description: IP elastica asociada al Nat Gateway
+    Export:
+      Name: NatGatewayEIP
+  BastionInstanceId:
+    Value: !Ref BastionInstance
+    Description: ID de la instancia EC2 recién creada
+    Export:
+      Name: BastionInstanceId
+  # Conectar al bastion usando esta IP
+  BastionPublicIp:
+    Value: !GetAtt BastionInstance.PublicIp
+    Description: Dirección IP pública del Bastion
+    Export:
+      Name: BastionInstancePublicIp
+  EC2InstanceId:
+    Value: !Ref EC2Instance
+    Description: ID de la instancia EC2 recién creada
+    Export:
+      Name: EC2InstanceId
+  # Conectar a la instancia privada desde el bastion usando esta IP
+  EC2InstancePrivateIp:
+    Value: !GetAtt EC2Instance.PrivateIp
+    Description: Dirección IP privada del Bastion
+    Export:
+      Name: EC2InstancePrivateIp
+
